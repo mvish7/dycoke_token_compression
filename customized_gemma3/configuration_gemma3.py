@@ -31,7 +31,7 @@ from transformers.models.siglip2 import Siglip2VisionConfig
 logger = logging.get_logger(__name__)
 
 
-class Gemma3TextConfig(PretrainedConfig):
+class CustomGemma3TextConfig(PretrainedConfig):
     r"""
     This is the configuration class to store the configuration of a [`Gemma3TextModel`]. It is used to instantiate an Gemma3Text
     model according to the specified arguments, defining the model architecture. Instantiating a configuration with the
@@ -256,7 +256,7 @@ class Gemma3TextConfig(PretrainedConfig):
         layer_type_validation(self.layer_types)
 
 
-class Gemma3Config(PretrainedConfig):
+class CustomGemma3Config(PretrainedConfig):
     r"""
     This is the configuration class to store the configuration of a [`Gemma3ForConditionalGeneration`]. It is used to instantiate an
     Gemma3ForConditionalGeneration according to the specified arguments, defining the model architecture. Instantiating a configuration
@@ -305,20 +305,20 @@ class Gemma3Config(PretrainedConfig):
     >>> configuration = model.config
     ```"""
 
-    model_type = "gemma3"
+    model_type = "custom_gemma3"
     attribute_map = {
         "image_token_id": "image_token_index",
         "boi_token_id": "boi_token_index",
         "eoi_token_id": "eoi_token_index",
     }
     sub_configs = {
-        "text_config": Gemma3TextConfig,
+        "text_config": CustomGemma3TextConfig,
         "vision_config": SiglipVisionConfig,
     }
 
     def __init__(
         self,
-        text_config: Optional[Union[Gemma3TextConfig, dict[str, Any]]] = None,
+        text_config: Optional[Union[CustomGemma3TextConfig, dict[str, Any]]] = None,
         vision_config: Optional[Union[SiglipVisionConfig, dict[str, Any]]] = None,
         mm_tokens_per_image: int = 256,
         boi_token_index: int = 255_999,
@@ -326,7 +326,7 @@ class Gemma3Config(PretrainedConfig):
         image_token_index: int = 262_144,
         initializer_range: float = 0.02,
         # DyCoke parameters
-        dycoke=True,
+        dycoke=False,
         dycoke_l=3,
         dycoke_p=0.8,
         dycoke_num_tokens_per_frame=256,
@@ -335,10 +335,10 @@ class Gemma3Config(PretrainedConfig):
         **kwargs,
     ):
         if text_config is None:
-            text_config = Gemma3TextConfig()
+            text_config = CustomGemma3TextConfig()
             logger.info("text_config is None, using default Gemma3TextConfig text config.")
         elif isinstance(text_config, dict):
-            text_config = Gemma3TextConfig(**text_config)
+            text_config = CustomGemma3TextConfig(**text_config)
 
         if isinstance(vision_config, dict):
             vision_config = SiglipVisionConfig(**vision_config)
@@ -365,4 +365,4 @@ class Gemma3Config(PretrainedConfig):
         super().__init__(**kwargs)
 
 
-__all__ = ["Gemma3Config", "Gemma3TextConfig"]
+__all__ = ["CustomGemma3Config", "CustomGemma3TextConfig"]

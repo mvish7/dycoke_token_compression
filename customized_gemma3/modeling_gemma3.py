@@ -27,23 +27,26 @@ from typing import Optional, Union, List, Tuple
 import torch
 import torch.nn as nn
 from pandas.core.computation.expressions import where
+from transformers import HybridCache
 
-from ...activations import ACT2FN
-from ...cache_utils import Cache, DynamicCache
-from ...configuration_utils import PretrainedConfig
-from ...generation import GenerationMixin
-from ...masking_utils import create_causal_mask, create_masks_for_generate, create_sliding_window_causal_mask
-from ...modeling_flash_attention_utils import FlashAttentionKwargs
-from ...modeling_layers import GradientCheckpointingLayer
-from ...modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
-from ...modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
-from ...modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
-from ...processing_utils import Unpack
-from ...utils import ModelOutput, auto_docstring, can_return_tuple, is_torchdynamo_compiling, logging
-from ...utils.deprecation import deprecate_kwarg
-from ..auto import AutoModel
-from .configuration_gemma3 import Gemma3Config, Gemma3TextConfig
+from transformers.activations import ACT2FN
+from transformers.cache_utils import Cache, DynamicCache
+from transformers.configuration_utils import PretrainedConfig
+from transformers.generation import GenerationMixin
+from transformers.masking_utils import create_causal_mask, create_masks_for_generate, create_sliding_window_causal_mask
+from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
+from transformers.modeling_layers import GradientCheckpointingLayer
+from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
+from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
+from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
+from transformers.processing_utils import Unpack
+from transformers.utils import ModelOutput, auto_docstring, can_return_tuple, is_torchdynamo_compiling, logging
+from transformers.utils.deprecation import deprecate_kwarg
+from transformers.models.auto import AutoModel
+from .configuration_gemma3 import CustomGemma3Config as Gemma3Config, CustomGemma3TextConfig as Gemma3TextConfig
 
+from dycoke.prunable_dynamic_cache import PrunableDynamicCache
+from dycoke.temporal_token_merging import dycoke_ttm
 
 logger = logging.get_logger(__name__)
 
@@ -60,157 +63,6 @@ class DycokeConfigs():
         self.image_token_length = None
         self.similarity = None
         self.attention_score = None
-
-
-# DyCoke Temporal Token Merging Function
-def dycole_ttm(image_feature, num_tokens_per_frame=256, merging_ratio=0.5):
-    # Split frames into tokens
-    num_frames = image_feature.shape[0]
-    merging_ratio = 1 - merging_ratio
-    image_feature = image_feature.view(image_feature.shape[0] * image_feature.shape[1], -1)
-    # Calculate similarities between adjacent even frames
-    similarities = []
-    for i in range(0, num_frames - 1, 2):
-        # Get tokens for adjacent frames
-        frame1_tokens = image_feature[i * num_tokens_per_frame:(i + 1) * num_tokens_per_frame]
-        frame2_tokens = image_feature[(i + 1) * num_tokens_per_frame:(i + 2) * num_tokens_per_frame]
-
-        # Calculate cosine similarity between normalized tokens
-        frame1_norm = torch.nn.functional.normalize(frame1_tokens, p=2, dim=1)
-        frame2_norm = torch.nn.functional.normalize(frame2_tokens, p=2, dim=1)
-        similarity = torch.nn.functional.cosine_similarity(frame1_norm, frame2_norm, dim=1)
-        similarities.append(similarity)
-
-    similarities = torch.stack([torch.tensor(similarity) for similarity in similarities])
-
-    # Process even frames
-    modified_image_feature = []
-    for i in range(0, num_frames - 1, 2):
-        frame1_tokens = image_feature[i * num_tokens_per_frame:(i + 1) * num_tokens_per_frame]
-        frame2_tokens = image_feature[(i + 1) * num_tokens_per_frame:(i + 2) * num_tokens_per_frame]
-
-        avg_similarity = similarities[i // 2]
-        num_tokens_to_keep = int(merging_ratio * num_tokens_per_frame)
-        tokens_to_keep = avg_similarity.topk(num_tokens_to_keep, largest=False).indices
-
-        modified_image_feature.append(frame1_tokens)
-        modified_image_feature.append(frame2_tokens[tokens_to_keep])
-
-    # Process odd frames
-    odd_similarities = []
-    for i in range(0, num_frames - 4, 4):
-        frame1_tokens = image_feature[i * num_tokens_per_frame:(i + 1) * num_tokens_per_frame]
-        frame2_tokens = image_feature[(i + 2) * num_tokens_per_frame:(i + 3) * num_tokens_per_frame]
-
-        similarity = torch.nn.functional.cosine_similarity(frame1_tokens, frame2_tokens, dim=1)
-        odd_similarities.append(similarity)
-
-    odd_similarities = torch.stack([torch.tensor(similarity) for similarity in odd_similarities])
-
-    for i in range(0, num_frames - 4, 4):
-        frame1_tokens = image_feature[i * num_tokens_per_frame:(i + 1) * num_tokens_per_frame]
-        frame2_tokens = image_feature[(i + 2) * num_tokens_per_frame:(i + 3) * num_tokens_per_frame]
-
-        avg_similarity = odd_similarities[i // 4]
-        num_tokens_to_keep = int(merging_ratio * num_tokens_per_frame)
-        tokens_to_keep = avg_similarity.topk(num_tokens_to_keep, largest=False).indices
-
-        modified_image_feature[i] = frame1_tokens
-        modified_image_feature[i + 2] = frame2_tokens[tokens_to_keep]
-
-    # Combine all tokens
-    combined_tokens = torch.cat(modified_image_feature, dim=0)
-    return combined_tokens
-
-
-class PrunableDynamicCache(DynamicCache):
-
-    def __init__(self) -> None:
-        self.key_cache: List[torch.Tensor] = []
-        self.value_cache: List[torch.Tensor] = []
-        self._seen_tokens = 0  # Used in `generate` to keep tally of how many tokens the cache has seen
-        self.kv_cache = None
-
-    def update(
-        self,
-        key_states: torch.Tensor,
-        value_states: torch.Tensor,
-        layer_idx: int,
-        cache_kwargs=None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        if layer_idx == 0:
-            self._seen_tokens += key_states.shape[-2]
-
-        # Update the cache
-        if len(self.key_cache) <= layer_idx:
-            self.key_cache.append(key_states)
-            self.value_cache.append(value_states)
-        else:
-            self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
-            self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
-
-        if self.kv_cache is None:
-            return self.key_cache[layer_idx], self.value_cache[layer_idx]
-        else:
-            return torch.gather(
-                self.key_cache[layer_idx],
-                dim=2,
-                index=torch.tensor(self.kv_cache, device=self.key_cache[layer_idx].device)
-                .view(1, 1, -1, 1)
-                .expand(
-                    self.key_cache[layer_idx].size(0),
-                    self.key_cache[layer_idx].size(1),
-                    -1,
-                    self.key_cache[layer_idx].size(3),
-                ),
-            ), torch.gather(
-                self.value_cache[layer_idx],
-                dim=2,
-                index=torch.tensor(self.kv_cache, device=self.value_cache[layer_idx].device)
-                .view(1, 1, -1, 1)
-                .expand(
-                    self.value_cache[layer_idx].size(0),
-                    self.value_cache[layer_idx].size(1),
-                    -1,
-                    self.value_cache[layer_idx].size(3),
-                ),
-            )
-
-    def update_cache(self, image_attention, config):
-        # Pre-calculate values to avoid repeated computation
-        start_idx = config.image_token_start_index
-        img_len = config.image_token_length
-        num_keep = int(img_len * (1 - config.dycoke_radio))
-
-        # Get top indices in one operation
-        top_indices = torch.topk(image_attention, num_keep, sorted=False)[1] + start_idx
-
-        # Create ranges efficiently using single arange call
-        device = image_attention.device
-        full_range = torch.arange(config.seq_length_with_past, device=device)
-        keep_indexs = torch.cat([
-            full_range[:start_idx],
-            top_indices,
-            full_range[start_idx + img_len:],
-        ])
-
-        # Convert to list once at end
-        self.kv_cache = keep_indexs.tolist()
-
-    def dycoke_pruning(self, attn, layer_idx, config):
-        attention_avg = attn[1].mean(1)[0, -1]
-        start_idx = config.image_token_start_index
-        img_len = config.image_token_length
-        image_attention = attention_avg[start_idx : start_idx + img_len]
-
-        if config.attention_score is not None:
-            config.similarity = torch.nn.functional.cosine_similarity(image_attention, config.attention_score, dim=0)
-        else:
-            config.similarity = 0
-        config.attention_score = image_attention
-
-        if config.similarity < 0.9:
-            self.update_cache(image_attention, config)
 
 
 @dataclass
@@ -615,7 +467,7 @@ class Gemma3PreTrainedModel(PreTrainedModel):
 
 
 @auto_docstring
-class Gemma3TextModel(Gemma3PreTrainedModel):
+class CustomGemma3TextModel(Gemma3PreTrainedModel):
     config_class = Gemma3TextConfig
 
     def __init__(self, config: Gemma3TextConfig, dycoke_config=None):
@@ -807,7 +659,7 @@ class Gemma3ForCausalLM(Gemma3PreTrainedModel, GenerationMixin):
 
     def __init__(self, config: Gemma3TextConfig):
         super().__init__(config)
-        self.model = Gemma3TextModel(config)
+        self.model = CustomGemma3TextModel(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
@@ -979,7 +831,7 @@ def token_type_ids_mask_function(token_type_ids: Optional[torch.Tensor], tokens_
     The Base Gemma3 model which consists of a vision backbone and a language model withou language modeling head.,
     """
 )
-class Gemma3Model(Gemma3PreTrainedModel):
+class CustomGemma3Model(Gemma3PreTrainedModel):
     _checkpoint_conversion_mapping = {"language_model.model": "language_model"}
     # we are filtering the logits/labels so we shouldn't divide the loss based on num_items_in_batch
     accepts_loss_kwargs = False
@@ -1006,7 +858,7 @@ class Gemma3Model(Gemma3PreTrainedModel):
             self.dycoke_configs.dycoke = dycoke
 
         # language_model = AutoModel.from_config(config=config.text_config)
-        language_model = Gemma3TextModel(config=config.text_config, dycoke_config=self.dycoke_configs)
+        language_model = CustomGemma3TextModel(config=config.text_config, dycoke_config=self.dycoke_configs)
         self.language_model = language_model
 
         self.post_init()
@@ -1115,7 +967,7 @@ class Gemma3Model(Gemma3PreTrainedModel):
 
             # apply temporal compression with dycoke
             if self.dycoke_configs.dycoke:
-                image_features = dycole_ttm(
+                image_features = dycoke_ttm(
                     image_features,
                     num_tokens_per_frame=self.dycoke_configs.dycoke_num_tokens_per_frame,
                     merging_ratio=self.dycoke_configs.dycoke_k,
@@ -1161,7 +1013,7 @@ class Gemma3Model(Gemma3PreTrainedModel):
             inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
 
         # It may already have been prepared by e.g. `generate`
-        if not isinstance(causal_mask_mapping := attention_mask, dict) or self.dycoke_configs.dycoke:
+        if not isinstance(causal_mask_mapping := attention_mask, dict) and self.dycoke_configs.dycoke:
             # causal_mask_mapping is already prepared by generate function from one of the superclass.
             # as dycoke trims down input_ids, input_embeds, cache_positions are impacted.
             # Prepare mask arguments
@@ -1226,7 +1078,7 @@ class Gemma3Model(Gemma3PreTrainedModel):
     The Base Gemma3 model which consists of a vision backbone and a language model without language modeling head.,
     """
 )
-class Gemma3ForConditionalGeneration(Gemma3PreTrainedModel, GenerationMixin):
+class CustomGemma3ForConditionalGeneration(Gemma3PreTrainedModel, GenerationMixin):
     _checkpoint_conversion_mapping = {
         "^language_model.model": "model.language_model",
         "^vision_tower": "model.vision_tower",
@@ -1237,7 +1089,7 @@ class Gemma3ForConditionalGeneration(Gemma3PreTrainedModel, GenerationMixin):
 
     def __init__(self, config: Gemma3Config):
         super().__init__(config)
-        self.model = Gemma3Model(config)
+        self.model = CustomGemma3Model(config)
         self.lm_head = nn.Linear(config.text_config.hidden_size, config.text_config.vocab_size, bias=False)
         # DyCoke parameters
         self.dycoke = getattr(config, "dycoke", False)
@@ -1475,8 +1327,8 @@ class Gemma3ForConditionalGeneration(Gemma3PreTrainedModel, GenerationMixin):
 
 __all__ = [
     "Gemma3PreTrainedModel",
-    "Gemma3TextModel",
+    "CustomGemma3TextModel",
     "Gemma3ForCausalLM",
-    "Gemma3ForConditionalGeneration",
-    "Gemma3Model",
+    "CustomGemma3ForConditionalGeneration",
+    "CustomGemma3Model",
 ]
