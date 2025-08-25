@@ -26,7 +26,7 @@ DyCoke can be tunred off by removing `--use_dycoke` argument. Please note that t
 
 ### Gemma3 with DyCoke vs Gemma3 without DyCoke
 
-### Gemma3 with DyCoke vs Gemma3 without DyCoke
+With DyCoke enabled Gemma3-4b-it model runs ~37 tokens/sec whereas vanilla gemma3-4b-it runs around ~12 tokens/sec
 
 <table>
   <tr>
@@ -35,10 +35,10 @@ DyCoke can be tunred off by removing `--use_dycoke` argument. Please note that t
   </tr>
   <tr>
     <td>
-      <img src="resources/demo_with_dycoke.webm" alt="Demo with DyCoke enabled">
+      <img src="resources/demo_with_dycoke.gif">
     </td>
     <td>
-      <img src="resources/demo_without_dycoke.webm" alt="Demo without DyCoke enabled">
+      <img src="resources/demo_without_dycoke.gif">
     </td>
   </tr>
 </table>
