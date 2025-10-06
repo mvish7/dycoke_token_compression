@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def construct_message(text_prompt: str, images: np.ndarray):
+def construct_gemma3_message(text_prompt: str, images: np.ndarray):
 
     usr_content = []
     for img_id in range(len(images)):
@@ -20,3 +20,21 @@ def construct_message(text_prompt: str, images: np.ndarray):
         }
     ]
     return messages
+
+
+def construct_qwen2_5_vl_message(text_prompt: str, video_path: str, fps: float = 1.0):
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "video",
+                    "video": video_path,
+                    "fps": fps,
+                },
+                {"type": "text", "text": text_prompt},
+            ],
+        }
+    ]
+    return messages
+

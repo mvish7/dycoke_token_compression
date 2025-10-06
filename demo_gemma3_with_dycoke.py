@@ -1,106 +1,3 @@
-# import time
-# import torch
-# from transformers import AutoConfig, AutoModel, AutoProcessor, TextStreamer
-#
-# from customized_gemma3.configuration_gemma3 import CustomGemma3Config
-# from customized_gemma3.modeling_gemma3 import CustomGemma3ForConditionalGeneration
-#
-# from utils.construct_gemma3_message import construct_message
-# from utils.video_reader import read_video_as_images
-#
-# from dycoke.prunable_dynamic_cache import PrunableDynamicCache
-#
-# AutoConfig.register("custom_gemma3", CustomGemma3Config)
-# AutoModel.register(CustomGemma3Config, CustomGemma3ForConditionalGeneration)
-#
-# model_id = "google/gemma-3-4b-it"
-#
-# config = CustomGemma3Config.from_pretrained(model_id)
-# config.dycoke = True
-# # config.text_config.dycoke = True
-# config.dycoke_l = 3  # Layer index to start DyCoke pruning
-# config.dycoke_p = 0.7  # Pruning ratio
-# config.dycoke_num_tokens_per_frame = 256  # Tokens per frame
-# config.dycoke_k = 0.2  # Merging ratio for temporal token merging
-#
-# model = CustomGemma3ForConditionalGeneration.from_pretrained(
-#     model_id,
-#     config=config,
-#     attn_implementation={
-#         "text_config": "eager",
-#         "vision_config": "sdpa"
-#     },
-#     device_map="auto",
-#     torch_dtype=torch.bfloat16,
-# ).eval()
-#
-# processor = AutoProcessor.from_pretrained(model_id)
-#
-# streamer = TextStreamer(processor, skip_prompt=True, skip_special_tokens=True)
-#
-# images = read_video_as_images(
-#     "/media/vishal/workspace/projects/DyCoke/playground/demo/xU25MMA2N4aVtYay.mp4",
-#     fps=1.0)
-# prompt = "what do you see in this video?"
-#
-# message = construct_message(prompt, images)
-#
-# inputs = processor.apply_chat_template(message,
-#                                        add_generation_prompt=True,
-#                                        tokenize=True,
-#                                        return_dict=True,
-#                                        return_tensors="pt").to(
-#                                            model.device, dtype=torch.bfloat16)
-#
-# input_len = inputs["input_ids"].shape[-1]
-#
-# torch.cuda.empty_cache()
-# torch.cuda.synchronize()
-# memory_before = torch.cuda.memory_allocated() / 1024**3  # GB
-#
-# # Generate response
-# start_time = time.time()
-#
-# if config.dycoke:
-#     dycoke_cache = PrunableDynamicCache()
-#     with torch.inference_mode():
-#         generation = model.generate(**inputs,
-#                                     max_new_tokens=512,
-#                                     do_sample=False,
-#                                     past_key_values=dycoke_cache,
-#                                     output_attentions=True,
-#                                     cache_implementation=None,
-#                                     streamer=streamer)
-#         generation = generation[0][input_len:]
-# else:
-#     with torch.inference_mode():
-#         generation = model.generate(**inputs,
-#                                     max_new_tokens=512,
-#                                     do_sample=False,
-#                                     output_attentions=False)
-#         generation = generation[0][input_len:]
-#
-# torch.cuda.synchronize()
-# end_time = time.time()
-#
-# # Measure memory after generation
-# memory_after = torch.cuda.memory_allocated() / 1024**3  # GB
-#
-# # decoded = processor.decode(generation, skip_special_tokens=True)
-# # print(decoded)
-#
-# # Calculate metrics
-# generation_time = end_time - start_time
-# memory_used = memory_after - memory_before
-#
-# tokens_per_second = len(generation) / generation_time
-#
-# print(f"Generated {len(generation)} tokens in {generation_time:.2f}s")
-# print(f"Speed: {tokens_per_second:.2f} tokens/second")
-# print(f"Memory used: {memory_used:.2f} GB")
-# # print(f"Response: {decoded}")
-
-
 import argparse
 import time
 import torch
@@ -109,7 +6,7 @@ from transformers import Gemma3ForConditionalGeneration, Gemma3Config
 # Custom imports
 from customized_gemma3.configuration_gemma3 import CustomGemma3Config
 from customized_gemma3.modeling_gemma3 import CustomGemma3ForConditionalGeneration
-from utils.construct_gemma3_message import construct_message
+from utils.construct_input_message import construct_gemma3_message
 from utils.video_reader import read_video_as_images
 from dycoke.prunable_dynamic_cache import PrunableDynamicCache
 
@@ -175,7 +72,7 @@ class Gemma3Inference:
             int: Input length.
         """
         images = read_video_as_images(video_path, fps=fps, sampling_factor=sampling_factor)
-        message = construct_message(prompt, images)
+        message = construct_gemma3_message(prompt, images)
 
         inputs = self.processor.apply_chat_template(
             message,
@@ -274,9 +171,6 @@ def main():
     )
 
     log_metrics(generation, gen_time, mem_used)
-    # Optionally decode tokens:
-    # decoded = inference.processor.decode(generation, skip_special_tokens=True)
-    # print(f"\nResponse:\n{decoded}")
 
 
 if __name__ == "__main__":
