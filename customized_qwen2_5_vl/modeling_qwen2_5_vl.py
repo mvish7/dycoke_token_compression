@@ -997,7 +997,7 @@ class CustomQwen2_5_VLModel(Qwen2_5_VLPreTrainedModel):
             self.dycoke_configs.dycoke = dycoke
             self.dycoke_configs.dycoke_l = getattr(config, "dycoke_l", 3)
             self.dycoke_configs.dycoke_p = getattr(config, "dycoke_p", 0.8)
-            self.dycoke_configs.dycoke_num_tokens_per_frame = getattr(config, "dycoke_num_tokens_per_frame", 256)
+            self.dycoke_configs.dycoke_num_tokens_per_frame = getattr(config, "dycoke_num_tokens_per_frame", 360)
             self.dycoke_configs.dycoke_k = getattr(config, "dycoke_k", 0.3)
         else:
             self.dycoke_configs = DycokeConfigs()
@@ -1307,7 +1307,8 @@ class CustomQwen2_5_VLModel(Qwen2_5_VLPreTrainedModel):
                 if self.dycoke_configs.dycoke:
                     num_frames = video_embeds.shape[0] // self.dycoke_configs.dycoke_num_tokens_per_frame
                     video_embeds = video_embeds.view(num_frames, -1, video_embeds.shape[-1])
-                    video_embeds = dycoke_ttm(video_embeds, num_tokens_per_frame=360, merging_ratio=0.4)
+                    video_embeds = dycoke_ttm(video_embeds, num_tokens_per_frame=
+                        self.dycoke_configs.dycoke_num_tokens_per_frame, merging_ratio=self.dycoke_configs.dycoke_k)
                     self.dycoke_configs.image_token_length = video_embeds.shape[0] - 1
 
                     # as video_tokens have been dropped by docoke, we need to adapt input_embedding

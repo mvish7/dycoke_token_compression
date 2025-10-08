@@ -493,13 +493,6 @@ class CustomGemma3TextModel(Gemma3PreTrainedModel):
         config.rope_scaling = {"rope_type": "default"}
         self.rotary_emb_local = Gemma3RotaryEmbedding(config=config)
 
-        # DyCoke parameters
-        # self.dycoke = getattr(config, "dycoke", False)
-        # self.dycoke_l = getattr(config, "dycoke_l", 3)
-        # self.dycoke_p = getattr(config, "dycoke_p", 0.8)
-        # self.dycoke_num_tokens_per_frame = getattr(config, "dycoke_num_tokens_per_frame", 256)
-        # self.dycoke_k = getattr(config, "dycoke_k", 0.3)
-
         # DyCoke configuration
         self.dycoke_configs = dycoke_config
 
