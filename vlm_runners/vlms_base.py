@@ -21,9 +21,14 @@ class BaseVLInference(ABC):
             custom_model_class: The customized model class.
             original_model_class: The original model class from transformers.
         """
+        if "gemma-3" in model_id:
+            custom_model_class_to_register = "custom_gemma3"
+        elif "Qwen" in model_id:
+            custom_model_class_to_register = "custom_qwen2_5_vl"
+
         # register with auto classes from transformers
-        AutoConfig.register(f"custom_{custom_model_class.__name__.lower()}", custom_config_class)
-        AutoModel.register(custom_config_class, custom_model_class)
+        AutoConfig.register(custom_model_class_to_register, custom_config_class)
+        AutoModel.register(custom_config_class, custom_model_class_to_register)
 
         # configuration and DyCoke Settings
         self.config = custom_config_class.from_pretrained(model_id)

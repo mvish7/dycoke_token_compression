@@ -9,7 +9,8 @@ def parse_args():
     # Common arguments
     parser.add_argument("--video", type=str, required=True, help="Path to input video.")
     parser.add_argument("--prompt", type=str, required=True, help="Text prompt for the model.")
-    parser.add_argument("--model_id", type=str, default="Qwen/Qwen2.5-VL-3B-Instruct", help="Model ID.")
+    parser.add_argument("--model_id", type=str, default="Qwen/Qwen2.5-VL-3B-Instruct",
+                        choices=["google/gemma-3-4b-it", "Qwen/Qwen2.5-VL-3B-Instruct"], help="Model ID.")
     parser.add_argument("--fps", type=float, default=1.0, help="Frames per second to sample video.")
     parser.add_argument("--sampling_factor", type=int, default=12,
                         help="Selects every Nth frame from the video (Gemma3 specific).")
